@@ -18,7 +18,7 @@ function rowsToObjects(rows) {
   const [headers, ...data] = rows;
   return data.map((row) =>
     headers.reduce((obj, h, i) => {
-      obj[h.trim()] = row[i] !== undefined ? row[i].trim() : "";
+      obj[h.trim()] = row[i] !== undefined ? String(row[i]).trim() : "";
       return obj;
     }, {})
   );
@@ -26,17 +26,17 @@ function rowsToObjects(rows) {
 
 function parseUGX(val) {
   if (!val) return 0;
-  const clean = String(val).replace(/[^0-9.]/g, "");
-  const num = parseFloat(clean) || 0;
-  if (String(val).toLowerCase().includes("m")) return num * 1000000;
-  if (String(val).toLowerCase().includes("k")) return num * 1000;
+  const str = String(val).toLowerCase().replace(/,/g, "").replace(/ugx/gi, "").trim();
+  const num = parseFloat(str.replace(/[^0-9.]/g, "")) || 0;
+  if (str.includes("m")) return num * 1000000;
+  if (str.includes("k")) return num * 1000;
   return num;
 }
 
 export function useSheetData() {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
   const [lastSync, setLastSync] = useState(null);
 
   const fetchAll = useCallback(async () => {
@@ -46,142 +46,139 @@ export function useSheetData() {
     try {
       const { SHEET_TABS } = SHEETS_CONFIG;
 
-      const [leadsRows, quotesRows, jobsRows, expensesRows, teamRows, feedbackRows] =
+      const [leadsRows, jobsRows, expensesRows, teamRows, feedbackRows] =
         await Promise.all([
           fetchTab(SHEET_TABS.leads),
-          fetchTab(SHEET_TABS.quotes).catch(() => []),
           fetchTab(SHEET_TABS.jobs),
           fetchTab(SHEET_TABS.expenses),
           fetchTab(SHEET_TABS.team).catch(() => []),
           fetchTab(SHEET_TABS.feedback).catch(() => []),
         ]);
 
-      const leads    = rowsToObjects(leadsRows);
-      const quotes   = rowsToObjects(quotesRows);
-      const jobs     = rowsToObjects(jobsRows);
-      const expenses = rowsToObjects(expensesRows);
-      const team     = rowsToObjects(teamRows);
-      const feedback = rowsToObjects(feedbackRows);
+      const leads    = rowsToObjects(leadsRows).filter(r => r["Date"]);
+      const jobs     = rowsToObjects(jobsRows).filter(r => r["Job Date"]);
+      const expenses = rowsToObjects(expensesRows).filter(r => r["Date"] || r["Category"]);
+      const team     = rowsToObjects(teamRows).filter(r => r["Name"]);
+      const feedback = rowsToObjects(feedbackRows).filter(r => r["Date"]);
 
-      // ── LEADS (Date, Lead Name, Phone, Source, Service Name, Status, Quoted Amount, Notes)
-      const totalLeads    = leads.filter(l => l["Date"]).length;
-      const wonLeads      = leads.filter(l => l["Status"] === "Won" || l["Status"] === "Closed").length;
-      const quoteSent     = leads.filter(l => l["Status"] === "Quote Sent" || l["Status"] === "Quote").length;
-      const assessBooked  = leads.filter(l => l["Status"] === "Assessment" || l["Status"] === "Assessment Booked").length;
-      const qualLeads     = wonLeads + quoteSent + assessBooked;
+      // ── LEADS
+      // Date | Lead Name | Phone | Source | Service Name | Status | Quoted Amount | Notes
+      const totalLeads   = leads.length;
+      const wonLeads     = leads.filter(l => ["Won","Closed","Job Confirmed"].includes(l["Status"])).length;
+      const quoteSent    = leads.filter(l => ["Quote Sent","Quote","Quoted"].includes(l["Status"])).length;
+      const assessBooked = leads.filter(l => ["Assessment","Assessment Booked","Site Visit"].includes(l["Status"])).length;
+      const src = (name) => leads.filter(l => l["Source"] === name).length;
 
-      const srcCounts = (name) => leads.filter(l => l["Source"] === name).length;
-
-      // ── JOBS (Job Date, Client, Service, Status, Quoted, Collected, Balance)
-      const activeJobs    = jobs.filter(j => j["Job Date"]);
-      const collected     = activeJobs.reduce((s, j) => s + parseUGX(j["Collected"]), 0);
-      const outstanding   = activeJobs.reduce((s, j) => s + parseUGX(j["Balance"]), 0);
-      const completedJobs = activeJobs.filter(j => parseUGX(j["Collected"]) > 0).length;
-      const scheduledJobs = activeJobs.filter(j => j["Status"] === "Scheduled" || j["Status"] === "Booked").length;
+      // ── JOBS
+      // Job Date | Client | Service | Status | Quoted | Collected | Balance
+      const collected     = jobs.reduce((s, j) => s + parseUGX(j["Collected"]), 0);
+      const outstanding   = jobs.reduce((s, j) => s + parseUGX(j["Balance"]), 0);
+      const completedJobs = jobs.filter(j => parseUGX(j["Collected"]) > 0).length;
+      const scheduledJobs = jobs.filter(j => ["Scheduled","Booked","Pending"].includes(j["Status"])).length;
       const avgJobValue   = completedJobs > 0 ? collected / completedJobs : 0;
 
       // ── EXPENSES
-      const activeExp     = expenses.filter(e => e["Date"] || e["Category"] || e["Amount"]);
-      const totalExpenses = activeExp.reduce((s, e) => {
-        const amt = parseUGX(e["Amount"] || e["Amount (UGX)"] || e["Cost"] || "0");
-        return s + amt;
-      }, 0);
-      const metaSpend = activeExp
-        .filter(e => (e["Category"] || "").toLowerCase().includes("meta") || (e["Category"] || "").toLowerCase().includes("ads"))
-        .reduce((s, e) => s + parseUGX(e["Amount"] || e["Amount (UGX)"] || e["Cost"] || "0"), 0);
+      // Date | Category | Description | Amount
+      const totalExpenses = expenses.reduce((s, e) => s + parseUGX(e["Amount"]), 0);
+      const metaSpend     = expenses
+        .filter(e => (e["Category"] || "").toLowerCase().includes("meta") ||
+                     (e["Category"] || "").toLowerCase().includes("ads") ||
+                     (e["Category"] || "").toLowerCase().includes("facebook"))
+        .reduce((s, e) => s + parseUGX(e["Amount"]), 0);
 
       const grossProfit  = collected - totalExpenses;
       const profitMargin = collected > 0 ? (grossProfit / collected) * 100 : 0;
 
-      // ── SERVICE breakdown from Jobs
-      const serviceTypes = [
-        "Deep Cleaning","Move-In","Move-Out","Sofa Cleaning",
-        "Carpet Cleaning","Roof Tile","Paver Cleaning","High Glass","Post-Construction",
-      ];
-      const servicePerformance = serviceTypes.map(s => ({
-        name: s,
-        jobs: activeJobs.filter(j => (j["Service"] || "").toLowerCase().includes(s.toLowerCase())).length,
-        revenue: activeJobs
-          .filter(j => (j["Service"] || "").toLowerCase().includes(s.toLowerCase()))
-          .reduce((sum, j) => sum + parseUGX(j["Collected"]), 0),
-      })).filter(s => s.jobs > 0);
+      // ── TEAM
+      // Name | Role | Phone | Status | Daily Rate
+      const teamSummary = team.map(m => ({
+        name:         m["Name"],
+        role:         m["Role"] || "Cleaner",
+        status:       m["Status"] || "Active",
+        dailyRate:    parseUGX(m["Daily Rate"]),
+        assessments:  0,
+        quotes:       0,
+        closed:       0,
+        revenue:      0,
+        rating:       "0.0",
+        attendance:   0,
+        productivity: 0,
+      }));
+
+      // ── FEEDBACK
+      // Date | Client | Rating (1-5) | Feedback | Follow Up | Needed
+      const ratingKey = Object.keys(feedback[0] || {}).find(k => k.toLowerCase().includes("rating")) || "Rating (1-5)";
+      const ratings   = feedback.map(f => parseFloat(f[ratingKey])).filter(n => !isNaN(n) && n > 0);
+      const avgRating = ratings.length ? (ratings.reduce((a,b) => a+b,0) / ratings.length).toFixed(1) : "0.0";
+      const followUps = feedback.filter(f => (f["Follow Up"] || "").toLowerCase() === "yes").length;
+
+      // ── SERVICE BREAKDOWN from Jobs
+      const serviceList = [...new Set(jobs.map(j => j["Service"]).filter(Boolean))];
+      const servicePerformance = serviceList.map(s => ({
+        name:    s,
+        jobs:    jobs.filter(j => j["Service"] === s).length,
+        revenue: jobs.filter(j => j["Service"] === s).reduce((sum, j) => sum + parseUGX(j["Collected"]), 0),
+      }));
 
       // ── LEAD SOURCES
       const srcNames  = ["Facebook","Instagram","Google","Referral","Repeat Client","WhatsApp"];
       const srcColors = ["#3B82F6","#A855F7","#FFB300","#00C9A7","#FF4D6D","#10B981"];
       const leadSources = srcNames
-        .map((name, i) => ({ name, value: srcCounts(name), color: srcColors[i] }))
+        .map((name, i) => ({ name, value: src(name), color: srcColors[i] }))
         .filter(s => s.value > 0);
-
-      // ── FEEDBACK (Rating, Complaint?, etc.)
-      const ratings    = feedback.map(f => parseFloat(f["Rating"] || f["Rating (1-5)"] || "0")).filter(Boolean);
-      const avgRating  = ratings.length ? (ratings.reduce((a,b) => a+b,0) / ratings.length).toFixed(1) : 0;
-      const complaints = feedback.filter(f => (f["Complaint"] || f["Complaint?"] || "").toLowerCase() === "yes").length;
-
-      // ── TEAM
-      const teamSummary = [...new Set(team.map(r => r["Staff Name"] || r["Name"]).filter(Boolean))].map(name => {
-        const rows = team.filter(r => (r["Staff Name"] || r["Name"]) === name);
-        const rs = rows.map(r => parseFloat(r["Rating"] || r["Customer Rating (1-5)"] || "0")).filter(Boolean);
-        return {
-          name,
-          assessments: rows.reduce((s,r) => s+(parseInt(r["Assessments"] || r["Assessments Done"] || "0")||0),0),
-          quotes:      rows.reduce((s,r) => s+(parseInt(r["Quotes"] || r["Quotes Generated"] || "0")||0),0),
-          closed:      rows.reduce((s,r) => s+(parseInt(r["Closed"] || r["Jobs Closed"] || "0")||0),0),
-          revenue:     rows.reduce((s,r) => s+parseUGX(r["Revenue"] || r["Revenue Generated (UGX)"] || "0"),0),
-          rating:      rs.length ? (rs.reduce((a,b)=>a+b,0)/rs.length).toFixed(1) : "0",
-          attendance:  rows.reduce((s,r) => s+(parseInt(r["Attendance"] || r["Attendance (Days)"] || "0")||0),0),
-          productivity: 0,
-        };
-      });
 
       setData({
         sales: {
-          leadsGenerated: { daily: Math.round(totalLeads/30), weekly: Math.round(totalLeads/4), monthly: totalLeads },
-          qualifiedLeads: qualLeads,
+          leadsGenerated: {
+            daily:   Math.max(1, Math.round(totalLeads / 30)),
+            weekly:  Math.max(1, Math.round(totalLeads / 4)),
+            monthly: totalLeads,
+          },
+          qualifiedLeads:        wonLeads + quoteSent + assessBooked,
           siteAssessmentsBooked: assessBooked,
-          quotesSent: quoteSent,
-          jobsClosed: wonLeads,
-          leadToQuote: totalLeads ? ((quoteSent/totalLeads)*100).toFixed(1) : 0,
-          quoteToSale: quoteSent ? ((wonLeads/quoteSent)*100).toFixed(1) : 0,
-          closingRate: totalLeads ? ((wonLeads/totalLeads)*100).toFixed(1) : 0,
+          quotesSent:            quoteSent,
+          jobsClosed:            wonLeads,
+          leadToQuote:  totalLeads ? ((quoteSent / totalLeads) * 100).toFixed(1) : "0.0",
+          quoteToSale:  quoteSent  ? ((wonLeads  / quoteSent)  * 100).toFixed(1) : "0.0",
+          closingRate:  totalLeads ? ((wonLeads  / totalLeads) * 100).toFixed(1) : "0.0",
           avgJobValue,
           monthlyRevenue: collected,
-          revenueGrowth: 0,
+          revenueGrowth:  0,
         },
         marketing: {
-          metaAdsSpend: metaSpend,
-          costPerLead: totalLeads ? metaSpend/totalLeads : 0,
-          whatsappInquiries: srcCounts("WhatsApp"),
-          websiteInquiries: srcCounts("Google"),
-          leadSources: leadSources.length ? leadSources : [{ name: "Facebook", value: 1, color: "#3B82F6" }],
-          roas: metaSpend > 0 ? (collected/metaSpend).toFixed(1) : 0,
+          metaAdsSpend:      metaSpend,
+          costPerLead:       totalLeads && metaSpend ? metaSpend / totalLeads : 0,
+          whatsappInquiries: src("WhatsApp"),
+          websiteInquiries:  src("Google"),
+          leadSources:       leadSources.length ? leadSources : [{ name: "No data yet", value: 1, color: T_ACCENT }],
+          roas:              metaSpend > 0 ? (collected / metaSpend).toFixed(1) : "0.0",
         },
         operations: {
-          jobsCompleted: completedJobs,
-          jobsScheduled: scheduledJobs,
-          jobsCancelled: activeJobs.filter(j => j["Status"] === "Cancelled").length,
-          avgTimePerJob: 0,
-          teamUtilization: teamSummary.length > 0 ? Math.min(100, Math.round((completedJobs/teamSummary.length)*20)) : 0,
+          jobsCompleted:           completedJobs,
+          jobsScheduled:           scheduledJobs,
+          jobsCancelled:           jobs.filter(j => j["Status"] === "Cancelled").length,
+          avgTimePerJob:           0,
+          teamUtilization:         team.length ? Math.min(100, Math.round((completedJobs / team.length) * 20)) : 0,
           siteAssessmentsCompleted: assessBooked,
-          servicePerformance: servicePerformance.length ? servicePerformance : [],
+          servicePerformance,
         },
         customer: {
-          satisfactionScore: avgRating || "0.0",
-          googleRating: avgRating || "0.0",
-          reviewsCollected: feedback.length,
-          repeatRate: totalLeads ? ((srcCounts("Repeat Client")/totalLeads)*100).toFixed(0) : 0,
-          referralRate: totalLeads ? ((srcCounts("Referral")/totalLeads)*100).toFixed(0) : 0,
-          complaintsLogged: complaints,
-          resolutionTime: 0,
+          satisfactionScore: avgRating,
+          googleRating:      avgRating,
+          reviewsCollected:  feedback.length,
+          repeatRate:  totalLeads ? ((src("Repeat Client") / totalLeads) * 100).toFixed(0) : "0",
+          referralRate: totalLeads ? ((src("Referral")      / totalLeads) * 100).toFixed(0) : "0",
+          complaintsLogged: followUps,
+          resolutionTime:   0,
         },
         financial: {
-          revenueCollected: collected,
+          revenueCollected:   collected,
           outstanding,
-          expenses: totalExpenses,
+          expenses:           totalExpenses,
           grossProfit,
-          netProfit: grossProfit,
-          profitMargin: profitMargin.toFixed(1),
-          revenuePerEmployee: teamSummary.length ? collected/teamSummary.length : 0,
+          netProfit:          grossProfit,
+          profitMargin:       profitMargin.toFixed(1),
+          revenuePerEmployee: team.length ? collected / team.length : 0,
         },
         team: teamSummary,
       });
@@ -196,9 +193,9 @@ export function useSheetData() {
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 5*60*1000);
+    const interval = setInterval(fetchAll, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchAll]);
 
   return { data, loading, error, lastSync, refetch: fetchAll };
-} 
+                                       }

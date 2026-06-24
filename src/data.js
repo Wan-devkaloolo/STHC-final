@@ -1,20 +1,9 @@
-export const SHEETS_CONFIG = {
-  SHEET_ID: "19Q_qmfwIuGeLqqiJVH1ZF9QjV_vcY7SZ-eQtwU7tq10",
-  API_KEY:  "AIzaSyAoQ5aLBgr6zXfnQE4CXHhooqvuTMuBdk4",
-  SHEET_TABS: {
-    leads:     "Leads",
-    quotes:    "Quotes",
-    jobs:      "Jobs",
-    expenses:  "Expenses",
-    team:      "Team",
-    feedback:  "Feedback",
-  },
+export const SUPABASE_CONFIG = {
+  URL: "https://nhkclljsstseravnsioc.supabase.co",
+  ANON_KEY: "sb_publishable_mUQoteb6OmhaDqDXnhZQtw_z6J-L2iw",
 };
 
-export const isConfigured = () =>
-  SHEETS_CONFIG.SHEET_ID !== "YOUR_SHEET_ID_HERE" &&
-  SHEETS_CONFIG.API_KEY  !== "YOUR_GOOGLE_API_KEY_HERE";
-
+export const isConfigured = () => true;
 export const initialGoals = {
   revenue: 15000000,
   leads:   120,

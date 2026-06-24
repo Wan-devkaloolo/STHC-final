@@ -1,4 +1,4 @@
-            import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SUPABASE_CONFIG } from "../data";
 
 const { URL, ANON_KEY } = SUPABASE_CONFIG;
@@ -176,4 +176,4 @@ export function useSheetData() {
   }, [fetchAll]);
 
   return { data, loading, error, lastSync, refetch: fetchAll };
-}
+                  }
